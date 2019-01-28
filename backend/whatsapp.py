@@ -2,9 +2,11 @@
 # -*- coding: utf-8 -*-
 
 import sys;
+
 sys.dont_write_bytecode = True;
 
 import os;
+import pickle;
 import signal;
 import base64;
 from threading import Thread, Timer
@@ -143,15 +145,19 @@ class WhatsAppWebClient:
 					if messageContent[0] == 'Pong' and messageContent[1] == True:
 						pend["callback"]({"Connected": True,"user":self.connInfo["me"],"pushname":self.connInfo["pushname"]})
 				elif pend["desc"] == "_restoresession":
+					eprint("Message after restore session: ", message);
 					eprint("")  # TODO implement Challenge Solving
- 				elif pend["desc"] == "_login":
+					if "callback" in pend and pend["callback"] is not None and "func" in pend["callback"] and pend["callback"]["func"] is not None and "tag" in pend["callback"] and pend["callback"]["tag"] is not None:
+						pend["callback"]["func"]({ "type": "generated_qr_code", "image": "ok", "content": "ok" }, pend["callback"]);
+						eprint("Message after restore session sent");
+				elif pend["desc"] == "_login":
 					eprint("Message after login: ", message);
 					self.loginInfo["serverRef"] = json.loads(messageContent)["ref"];
 					eprint("set server id: " + self.loginInfo["serverRef"]);
 					self.loginInfo["privateKey"] = curve25519.Private();
 					self.loginInfo["publicKey"] = self.loginInfo["privateKey"].get_public();
 					qrCodeContents = self.loginInfo["serverRef"] + "," + base64.b64encode(self.loginInfo["publicKey"].serialize()) + "," + self.loginInfo["clientId"];
-					eprint("qr code contents: " + qrCodeContents);
+					# eprint("qr code contents: " + qrCodeContents);
 
 					svgBuffer = io.BytesIO();											# from https://github.com/mnooner256/pyqrcode/issues/39#issuecomment-207621532
 					pyqrcode.create(qrCodeContents, error='L').svg(svgBuffer, scale=6, background="rgba(0,0,0,0.0)", module_color="#122E31", quiet_zone=0);
@@ -206,6 +212,9 @@ class WhatsAppWebClient:
 							# eprint("keys encrypted         : ", base64.b64encode(keysEncrypted));
 							# eprint("keys decrypted         : ", base64.b64encode(keysDecrypted));
 
+							pickle.dump(self.connInfo, open('/Users/lamarcio.jorge/watmp/connInfo', 'wb'))
+							pickle.dump(self.loginInfo , open('/Users/lamarcio.jorge/watmp/loginInfo', 'wb'))
+							
 							eprint("set connection info: client, server and browser token; secret, shared secret, enc key, mac key");
 							eprint("logged in as " + jsonObj[1]["pushname"]  + " (" + jsonObj[1]["wid"] + ")");
 						elif jsonObj[0] == "Stream":
@@ -230,6 +239,10 @@ class WhatsAppWebClient:
 		self.websocketThread.start();
 
 	def generateQRCode(self, callback=None):
+		if os.path.isfile('/Users/lamarcio.jorge/watmp/connInfo'):
+			self.restoreSession(callback)
+			return
+
 		self.loginInfo["clientId"] = base64.b64encode(os.urandom(16));
 		messageTag = str(getTimestamp());
 		self.messageQueue[messageTag] = { "desc": "_login", "callback": callback };
@@ -237,12 +250,16 @@ class WhatsAppWebClient:
 		self.activeWs.send(message);
 		
 	def restoreSession(self, callback=None):
+		self.connInfo = pickle.load(open('/Users/lamarcio.jorge/watmp/connInfo', 'rb'))
+		
+		self.loginInfo = pickle.load(open('/Users/lamarcio.jorge/watmp/loginInfo', 'rb'))
+
 		messageTag = str(getTimestamp())
-		message = messageTag + ',["admin","init",[0,3,1649],["Chromium at ' + datetime.now().isoformat() + '","Chromium"],"' + self.loginInfo["clientId"] + '",true]'
+		message = messageTag + ',["admin","init",[0,3,1649],["Chromium at ' + datetime.datetime.now().isoformat() + '","Chromium"],"' + self.loginInfo["clientId"] + '",true]'
 		self.activeWs.send(message)
 
 		messageTag = str(getTimestamp())
-		self.messageQueue[messageTag] = {"desc": "_restoresession"}
+		self.messageQueue[messageTag] = {"desc": "_restoresession", "callback": callback}
 		message = messageTag + ',["admin","login","' + self.connInfo["clientToken"] + '", "' + self.connInfo[
 		    "serverToken"] + '", "' + self.loginInfo["clientId"] + '", "takeover"]'
 
